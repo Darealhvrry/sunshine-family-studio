@@ -419,7 +419,7 @@ class SunshineLauncher(tk.Tk):
             FFMPEG, "-y",
             "-f", "concat", "-safe", "0",
             "-i", img_list,
-            "-vf", "split[a][b];[a]scale=1920:1080:force_original_aspect_ratio=decrease[scaled];color=c=#FFF9F0:size=1920x1080[bg];[bg][scaled]overlay=(W-w)/2:(H-h)/2,format=yuv420p",
+            "-vf", "format=rgba,colorchannelmixer=aa=1,format=yuv420p",
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
