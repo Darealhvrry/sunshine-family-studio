@@ -124,32 +124,52 @@ class SunshineLauncher(tk.Tk):
             return json.loads(resp.read())
 
     def _fetch_elements(self):
-        """Fetch character elements from Kling API."""
+        """Verify API keys work and set up character image mapping."""
         try:
-            self._log("🔍 Fetching your Kling character elements...")
-            resp = self._kling_get("/v1/elements?pageSize=50")
-            items = resp.get("data", {}).get("list", [])
-            self.elements = {}
-            for item in items:
-                name = item.get("name", "")
-                eid  = item.get("elementId", item.get("id", ""))
-                self.elements[name] = eid
-                self._log(f"  ✅ Found element: {name} → {eid}")
-            if self.elements:
-                self._log(f"\n🎭 {len(self.elements)} character elements loaded!")
-                self._update_cast_display()
-            else:
-                self._log("⚠️ No elements found — make sure you created them in Kling")
+            self._log("🔍 Verifying Kling API connection...")
+            # Test connection with account endpoint
+            resp = self._kling_get("/v1/account/costs")
+            self._log("✅ Kling API connected successfully!")
         except Exception as e:
-            self._log(f"❌ Could not fetch elements: {e}")
-            self._log("   Check your API keys in kling_keys.txt")
+            # Try alternative verification
+            try:
+                resp = self._kling_get("/v1/videos/text2video?pageSize=1")
+                self._log("✅ Kling API connected successfully!")
+            except Exception as e2:
+                self._log(f"⚠️ API connection issue: {e2}")
+                self._log("   Will attempt generation anyway...")
+
+        # Map characters to their image files
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        chars_dir = os.path.join(script_dir, "Characters")
+        if not os.path.exists(chars_dir):
+            chars_dir = os.path.join(script_dir, "characters")
+
+        char_map = {
+            "Mommy Mia": "mommy_mia.png",
+            "Daddy Ben": "daddy_ben.png",
+            "Tommy":     "tommy.png",
+            "Lilly":     "lilly.png",
+            "Sunny":     "sunny.png",
+        }
+        self.elements = {}
+        for char, filename in char_map.items():
+            img_path = os.path.join(chars_dir, filename)
+            if os.path.exists(img_path):
+                self.elements[char] = img_path
+                self._log(f"  ✅ {char} → {filename}")
+            else:
+                self._log(f"  ⚠️ {char} image not found: {filename}")
+
+        self._log(f"\n🎭 {len(self.elements)} characters ready!")
+        self._update_cast_display()
 
     def _find_element_id(self, character):
-        """Find element ID for a character by name matching."""
+        """Find character image path by name matching."""
         char_lower = character.lower()
-        for name, eid in self.elements.items():
+        for name, path in self.elements.items():
             if char_lower in name.lower() or name.lower() in char_lower:
-                return eid
+                return path
         return None
 
     # ── UI BUILDER ─────────────────────────────────────────────
@@ -460,51 +480,54 @@ class SunshineLauncher(tk.Tk):
             self.gen_btn.configure(state="normal", text="🎬  GENERATE EPISODE")
             self.progress.stop()
 
-    def _generate_kling_clip(self, action, element_id, output_path, character):
-        """Generate a video clip using Kling API with character element."""
+    def _generate_kling_clip(self, action, img_path, output_path, character):
+        """Generate a video clip using Kling image-to-video API."""
         try:
-            # Build prompt based on character and action
             style = "3D Pixar animated style, cinematic lighting, smooth animation, family friendly, Disney Pixar quality"
             prompt = f"{action}, {style}"
 
+            # Encode image as base64
+            with open(img_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+
             payload = {
-                "model_name": "kling-v2-master",
+                "model_name": "kling-v1-6",
+                "image": img_b64,
                 "prompt": prompt,
                 "duration": "5",
+                "mode": "std",
                 "aspect_ratio": "16:9",
-                "elements": [{"elementId": element_id}]
             }
 
-            self._log(f"    Sending to Kling API...")
-            resp = self._kling_post("/v1/videos/text2video", payload)
+            self._log(f"    Sending to Kling image-to-video API...")
+            resp = self._kling_post("/v1/videos/image2video", payload)
             task_id = resp.get("data", {}).get("taskId", "")
             if not task_id:
-                self._log(f"    No task ID returned: {resp}")
+                self._log(f"    No task ID: {resp}")
                 return False
 
-            self._log(f"    Task ID: {task_id} — waiting for completion...")
+            self._log(f"    Task {task_id} submitted — waiting...")
 
-            # Poll for completion
             for attempt in range(60):
                 time.sleep(10)
-                status_resp = self._kling_get(f"/v1/videos/text2video/{task_id}")
+                status_resp = self._kling_get(f"/v1/videos/image2video/{task_id}")
                 status = status_resp.get("data", {}).get("taskStatus", "")
                 self._log(f"    Status: {status} ({attempt+1}/60)")
 
                 if status == "succeed":
-                    works = status_resp.get("data", {}).get("taskResult", {}).get("videos", [])
-                    if works:
-                        video_url = works[0].get("url", "")
+                    videos = status_resp.get("data", {}).get("taskResult", {}).get("videos", [])
+                    if videos:
+                        video_url = videos[0].get("url", "")
                         if video_url:
                             self._log(f"    Downloading clip...")
                             urllib.request.urlretrieve(video_url, output_path)
                             return os.path.exists(output_path)
                     return False
                 elif status in ("failed", "error"):
-                    self._log(f"    Kling generation failed")
+                    self._log(f"    Kling generation failed: {status_resp}")
                     return False
 
-            self._log("    Timed out waiting for Kling")
+            self._log("    Timed out")
             return False
 
         except Exception as e:
