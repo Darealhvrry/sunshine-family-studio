@@ -432,6 +432,14 @@ class SunshineLauncher(tk.Tk):
 
         self._log(f"  Video track built OK")
 
+        # Check video_only was actually created
+        if not os.path.exists(video_only) or os.path.getsize(video_only) < 1000:
+            self._log(f"  Video-only file missing or too small: {video_only}")
+            self._log(f"  FFmpeg stderr: {result1.stderr[-500:]}")
+            return
+
+        self._log(f"  Video-only size: {os.path.getsize(video_only)} bytes")
+
         # Step 2: Mux video + audio together
         result2 = subprocess.run([
             FFMPEG, "-y",
@@ -444,9 +452,9 @@ class SunshineLauncher(tk.Tk):
             video_path
         ], capture_output=True, text=True)
         if result2.returncode != 0:
-            self._log(f"  FFmpeg mux error: {result2.stderr[-400:]}")
+            self._log(f"  FFmpeg mux error: {result2.stderr[-500:]}")
         else:
-            self._log(f"  Video + audio muxed OK!")
+            self._log(f"  Video + audio muxed OK! Size: {os.path.getsize(video_path)} bytes")
             try:
                 os.remove(video_only)
             except:
