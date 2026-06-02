@@ -37,6 +37,26 @@ CHARACTERS = {
     "All":        {"color": SUN,       "emoji": "🎵"},
 }
 
+# ElevenLabs Voice IDs
+VOICE_IDS = {
+    "Mommy Mia":  "052jzHJceQiZr7ltnY0C",  # Mia
+    "Daddy Ben":  "wSqOdjeNqDrHcoK0zorF",  # Lukas
+    "Tommy":      "s3TPKV1kjDlVtZbl4Ksh",  # Adam
+    "Lilly":      "vGQNBgLaiM3EdZtxIiuY",  # Aerisita
+    "Sunny":      "eppqEXVumQ3CfdndcIBd",  # Minnie
+    "All":        "052jzHJceQiZr7ltnY0C",  # Mia
+}
+
+# Narrator rotates through all character voices
+NARRATOR_VOICES = [
+    "052jzHJceQiZr7ltnY0C",  # Mia
+    "wSqOdjeNqDrHcoK0zorF",  # Lukas
+    "s3TPKV1kjDlVtZbl4Ksh",  # Adam
+    "vGQNBgLaiM3EdZtxIiuY",  # Aerisita
+    "eppqEXVumQ3CfdndcIBd",  # Minnie
+]
+_narrator_index = [0]  # mutable counter
+
 SAMPLE_SCRIPT = """Narrator: Good morning! Time to wake up with the Sunshine Family!
 Daddy Ben: opens the bedroom door and peeks inside smiling
 Tommy: jumps out of bed excited pointing at the sunny window
@@ -68,14 +88,23 @@ class SunshineLauncher(tk.Tk):
             return
         self.access_key = ""
         self.secret_key = ""
-        with open(keys_file) as f:
+        self.elevenlabs_key = ""
+        with open(keys_file, encoding="utf-8") as f:
             for line in f:
+                line = line.strip()
                 if line.startswith("ACCESS_KEY="):
                     self.access_key = line.split("=", 1)[1].strip()
                 elif line.startswith("SECRET_KEY="):
                     self.secret_key = line.split("=", 1)[1].strip()
+                elif line.startswith("ELEVENLABS_KEY="):
+                    self.elevenlabs_key = line.split("=", 1)[1].strip()
+
         if self.access_key and self.secret_key:
-            self._log("✅ API keys loaded!")
+            self._log("✅ Kling API keys loaded!")
+            if self.elevenlabs_key:
+                self._log("✅ ElevenLabs key loaded!")
+            else:
+                self._log("⚠️ No ElevenLabs key — using Windows TTS fallback")
             threading.Thread(target=self._fetch_elements, daemon=True).start()
         else:
             self._log("❌ Could not read API keys from kling_keys.txt")
@@ -161,6 +190,27 @@ class SunshineLauncher(tk.Tk):
             else:
                 self._log(f"  ⚠️ {char} image not found: {filename}")
 
+        # Map visuals folder
+        self.visuals_dir = os.path.join(script_dir, "Visuals")
+        if not os.path.exists(self.visuals_dir):
+            self.visuals_dir = os.path.join(script_dir, "visuals")
+        if os.path.exists(self.visuals_dir):
+            visual_count = len([f for f in os.listdir(self.visuals_dir)
+                               if f.lower().endswith(('.png','.jpg','.jpeg','.webp'))])
+            self._log(f"  ✅ Visuals folder found: {visual_count} scene images")
+        else:
+            self._log(f"  ⚠️ No Visuals folder found")
+            self.visuals_dir = None
+
+        # Map clips folder (manually downloaded from Kling website)
+        self.clips_dir = os.path.join(script_dir, "Clips")
+        if not os.path.exists(self.clips_dir):
+            os.makedirs(self.clips_dir)
+        clip_count = len([f for f in os.listdir(self.clips_dir)
+                         if f.lower().endswith('.mp4')])
+        self._log(f"  ✅ Clips folder ready: {clip_count} clips found")
+        self._log(f"     → Add clips as clip_2.mp4, clip_3.mp4 etc.")
+
         self._log(f"\n🎭 {len(self.elements)} characters ready!")
         self._update_cast_display()
 
@@ -170,6 +220,44 @@ class SunshineLauncher(tk.Tk):
         for name, path in self.elements.items():
             if char_lower in name.lower() or name.lower() in char_lower:
                 return path
+        return None
+
+    def _find_clip(self, line_number):
+        """Find a manually downloaded Kling clip for a line number."""
+        if not hasattr(self, 'clips_dir') or not self.clips_dir:
+            return None
+        for ext in ['.mp4', '.MP4', '.mov', '.MOV']:
+            for name in [f"clip_{line_number}", f"clip_{line_number:03d}",
+                         str(line_number)]:
+                path = os.path.join(self.clips_dir, f"{name}{ext}")
+                if os.path.exists(path):
+                    return path
+        return None
+
+    def _find_visual(self, line_number, character=None):
+        """Find scene visual for a line number.
+        Falls back to: nearest visual → character image → None.
+        """
+        # 1. Try exact match for this line number
+        if hasattr(self, 'visuals_dir') and self.visuals_dir:
+            for ext in ['.png', '.jpg', '.jpeg', '.webp',
+                        '.PNG', '.JPG', '.JPEG', '.avif', '.AVIF']:
+                path = os.path.join(self.visuals_dir, f"{line_number}{ext}")
+                if os.path.exists(path):
+                    return path
+
+            # 2. Try nearest lower line number (e.g. line 7 missing → try 6, 5, 4...)
+            for fallback in range(line_number - 1, 0, -1):
+                for ext in ['.png', '.jpg', '.jpeg', '.webp',
+                            '.PNG', '.JPG', '.JPEG', '.avif', '.AVIF']:
+                    path = os.path.join(self.visuals_dir, f"{fallback}{ext}")
+                    if os.path.exists(path):
+                        return path
+
+        # 3. Fall back to character image
+        if character and hasattr(self, 'elements') and character in self.elements:
+            return self.elements[character]
+
         return None
 
     # ── UI BUILDER ─────────────────────────────────────────────
@@ -299,10 +387,10 @@ class SunshineLauncher(tk.Tk):
         tips.pack(fill="x", pady=(12, 0))
         for t in [
             "• Narrator lines = voice only, no video",
-            "• Character lines = AI video generated",
-            "• Describe the action, not dialogue",
-            "• E.g. 'Tommy: jumps out of bed excited'",
-            "• Keep actions simple and visual",
+            "• Generate clips on Kling website",
+            "• Save as clip_2.mp4, clip_3.mp4 etc.",
+            "• Drop clips into sunshine_family/Clips/",
+            "• App adds voices & assembles episode",
         ]:
             tk.Label(tips, text=t, bg=BG, fg=MUTED,
                      font=("Helvetica", 8), anchor="w").pack(fill="x")
@@ -443,21 +531,15 @@ class SunshineLauncher(tk.Tk):
                     self._log(f"  ⚠️ Voice failed")
 
                 # Generate video for non-narrator lines
-                if char.lower() != "narrator":
-                    element_id = self._find_element_id(char)
-                    if element_id:
-                        self._log(f"  🎬 Generating Kling video clip...")
-                        clip_path = os.path.join(output_dir, f"clip_{i:03d}.mp4")
-                        clip_ok = self._generate_kling_clip(
-                            action, element_id, clip_path, char)
-                        if clip_ok:
-                            self._log(f"  ✅ Video clip ready!")
-                            video_clips.append((char, action, clip_path, wav_path))
-                        else:
-                            self._log(f"  ⚠️ Kling clip failed — using image fallback")
-                            video_clips.append((char, action, None, wav_path))
+                if char.lower() not in ("narrator",):
+                    # Check for manually downloaded Kling clip first
+                    manual_clip = self._find_clip(i + 1)
+                    if manual_clip:
+                        self._log(f"  🎬 Using manual clip: {os.path.basename(manual_clip)}")
+                        video_clips.append((char, action, manual_clip, wav_path))
                     else:
-                        self._log(f"  ⚠️ No element found for {char} — using image fallback")
+                        self._log(f"  🖼 No clip found for line {i+1} — using image fallback")
+                        self._log(f"     → Generate in Kling and save as clip_{i+1}.mp4 in Clips folder")
                         video_clips.append((char, action, None, wav_path))
                 else:
                     video_clips.append((char, action, None, wav_path))
@@ -480,14 +562,21 @@ class SunshineLauncher(tk.Tk):
             self.gen_btn.configure(state="normal", text="🎬  GENERATE EPISODE")
             self.progress.stop()
 
-    def _generate_kling_clip(self, action, img_path, output_path, character):
+    def _generate_kling_clip(self, action, img_path, output_path, character, scene_img=None):
         """Generate a video clip using Kling image-to-video API."""
         try:
             style = "3D Pixar animated style, cinematic lighting, smooth animation, family friendly, Disney Pixar quality"
             prompt = f"{action}, {style}"
 
+            # Use scene image if available, otherwise use character image
+            source_img = scene_img if scene_img and os.path.exists(scene_img) else img_path
+            if scene_img and os.path.exists(scene_img):
+                self._log(f"    Using scene visual: {os.path.basename(scene_img)}")
+            else:
+                self._log(f"    Using character image: {os.path.basename(img_path)}")
+
             # Encode image as base64
-            with open(img_path, "rb") as f:
+            with open(source_img, "rb") as f:
                 img_b64 = base64.b64encode(f.read()).decode()
 
             payload = {
@@ -500,7 +589,21 @@ class SunshineLauncher(tk.Tk):
             }
 
             self._log(f"    Sending to Kling image-to-video API...")
-            resp = self._kling_post("/v1/videos/image2video", payload)
+            # Retry up to 3 times on rate limit
+            resp = None
+            for attempt in range(3):
+                try:
+                    resp = self._kling_post("/v1/videos/image2video", payload)
+                    break
+                except Exception as e:
+                    if "429" in str(e) and attempt < 2:
+                        wait = 30 * (attempt + 1)
+                        self._log(f"    Rate limited — waiting {wait}s before retry {attempt+2}/3...")
+                        time.sleep(wait)
+                    else:
+                        raise
+            if not resp:
+                return False
             task_id = resp.get("data", {}).get("taskId", "")
             if not task_id:
                 self._log(f"    No task ID: {resp}")
@@ -535,7 +638,70 @@ class SunshineLauncher(tk.Tk):
             return False
 
     def _generate_tts(self, text, wav_path, character):
-        """Generate TTS using Windows SAPI via PowerShell script file."""
+        """Generate TTS using ElevenLabs API."""
+        try:
+            clean = re.sub(r'[^\x00-\x7F]+', '', text).strip()
+            if not clean:
+                clean = "la la la"
+
+            # Get voice ID for this character
+            if character == "Narrator":
+                voice_id = NARRATOR_VOICES[_narrator_index[0] % len(NARRATOR_VOICES)]
+                _narrator_index[0] += 1
+            else:
+                voice_id = VOICE_IDS.get(character, VOICE_IDS.get("Mommy Mia"))
+
+            # Check if ElevenLabs key exists
+            if not hasattr(self, 'elevenlabs_key') or not self.elevenlabs_key:
+                return self._generate_tts_fallback(text, wav_path)
+
+            # Call ElevenLabs API
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+            payload = json.dumps({
+                "text": clean,
+                "model_id": "eleven_turbo_v2",
+                "voice_settings": {
+                    "stability": 0.5,
+                    "similarity_boost": 0.75,
+                    "style": 0.3,
+                    "use_speaker_boost": True
+                }
+            }).encode()
+
+            req = urllib.request.Request(url, data=payload, headers={
+                "xi-api-key": self.elevenlabs_key,
+                "Content-Type": "application/json",
+                "Accept": "audio/mpeg"
+            })
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                mp3_data = resp.read()
+
+            # Save as mp3 first then convert to wav
+            mp3_path = wav_path.replace(".wav", ".mp3")
+            with open(mp3_path, "wb") as f:
+                f.write(mp3_data)
+
+            # Convert mp3 to wav using FFmpeg
+            subprocess.run([
+                FFMPEG, "-y", "-i", mp3_path,
+                "-ar", "44100", "-ac", "1",
+                wav_path
+            ], capture_output=True, timeout=30)
+
+            try:
+                os.remove(mp3_path)
+            except:
+                pass
+
+            return os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000
+
+        except Exception as e:
+            self._log(f"    ElevenLabs error: {e} — trying fallback")
+            return self._generate_tts_fallback(text, wav_path)
+
+    def _generate_tts_fallback(self, text, wav_path):
+        """Fallback TTS using Windows SAPI via PowerShell."""
         try:
             clean = re.sub(r'[^\x00-\x7F]+', '', text).replace("'", "").replace('"', '').strip()
             if not clean:
@@ -561,7 +727,7 @@ class SunshineLauncher(tk.Tk):
                 pass
             return os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000
         except Exception as e:
-            self._log(f"    TTS error: {e}")
+            self._log(f"    Fallback TTS error: {e}")
             return False
 
     def _assemble_episode(self, video_clips, episode_path, work_dir):
