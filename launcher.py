@@ -325,60 +325,61 @@ class SunshineLauncher(tk.Tk):
             self.progress.stop()
 
     def _generate_tts(self, text, wav_path, character):
-        """Generate TTS using Windows SAPI via a temp VBScript file."""
+        """Generate TTS using Windows SAPI via PowerShell script file."""
         try:
-            # Clean text — remove emoji and special chars that break SAPI
             import re
-            clean = re.sub(r'[^\x00-\x7F]+', '', text).replace('"', '').replace("'", '').strip()
+            clean = re.sub(r'[^\x00-\x7F]+', '', text).replace("'", "").replace('"', '').strip()
             if not clean:
-                clean = "..."
+                clean = "la la la"
 
-            # Write a VBScript file — most reliable Windows TTS method
-            vbs_path = wav_path.replace(".wav", "_tts.vbs")
-            vbs = (
-                f'Dim sapi\n'
-                f'Set sapi = CreateObject("SAPI.SpVoice")\n'
-                f'Dim stream\n'
-                f'Set stream = CreateObject("SAPI.SpFileStream")\n'
-                f'stream.Open "{wav_path}", 3, False\n'
-                f'sapi.AudioOutputStream = stream\n'
-                f'sapi.Rate = 1\n'
-                f'sapi.Speak "{clean}"\n'
-                f'stream.Close\n'
+            # Write a PowerShell script file
+            ps_path = wav_path.replace(".wav", "_tts.ps1")
+            ps = (
+                f"Add-Type -AssemblyName System.Speech\n"
+                f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer\n"
+                f"$s.Rate = 2\n"
+                f"$s.SetOutputToWaveFile('{wav_path}')\n"
+                f"$s.Speak('{clean}')\n"
+                f"$s.Dispose()\n"
             )
-            with open(vbs_path, "w") as f:
-                f.write(vbs)
+            with open(ps_path, "w") as f:
+                f.write(ps)
 
-            result = subprocess.run(
-                ["cscript", "//NoLogo", vbs_path],
+            subprocess.run(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-File", ps_path],
                 capture_output=True, timeout=30
             )
-            # Clean up temp vbs
             try:
-                os.remove(vbs_path)
+                os.remove(ps_path)
             except:
                 pass
 
-            return os.path.exists(wav_path)
+            return os.path.exists(wav_path) and os.path.getsize(wav_path) > 1000
         except Exception as e:
             self._log(f"    TTS error: {e}")
             return False
 
     def _concat_audio(self, audio_files, output_path, work_dir):
-        """Concatenate all WAV files using FFmpeg."""
+        """Concatenate all WAV files using FFmpeg with re-encoding."""
         list_file = os.path.join(work_dir, "audio_list.txt")
-        existing = [(c, d, p) for c, d, p in audio_files if os.path.exists(p)]
+        existing = [(c, d, p) for c, d, p in audio_files if os.path.exists(p) and os.path.getsize(p) > 1000]
         if not existing:
-            self._log("  ⚠️ No audio files to concatenate")
+            self._log("  No valid audio files to concatenate")
             return
-        with open(list_file, "w") as f:
+        with open(list_file, "w", encoding="utf-8") as f:
             for _, _, wav in existing:
                 f.write(f"file '{wav}'\n")
-        subprocess.run(
+        result = subprocess.run(
             [FFMPEG, "-y", "-f", "concat", "-safe", "0",
-             "-i", list_file, "-c", "copy", output_path],
-            capture_output=True
+             "-i", list_file,
+             "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le",
+             output_path],
+            capture_output=True, text=True
         )
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            self._log(f"  Audio concat OK: {os.path.getsize(output_path)} bytes")
+        else:
+            self._log(f"  Audio concat failed: {result.stderr[-300:]}")
 
     def _assemble_video(self, audio_files, audio_path, video_path):
         """Create video: character image + audio using FFmpeg."""
@@ -447,6 +448,7 @@ class SunshineLauncher(tk.Tk):
             "-i", audio_path,
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
+            "-ar", "44100",
             "-shortest",
             "-movflags", "+faststart",
             video_path
