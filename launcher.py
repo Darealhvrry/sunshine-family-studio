@@ -210,45 +210,38 @@ class SunshineLauncher(tk.Tk):
 
     # ── ACTIONS ────────────────────────────────────────────────
     def _check_update(self):
-        """Apply update from pending_update folder."""
-        import zipfile
+        """Download latest launcher.py from GitHub and apply it."""
+        import urllib.request, shutil
+        GITHUB_URL = "https://raw.githubusercontent.com/Darealhvrry/sunshine-family-studio/main/launcher.py"
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        pending_dir = os.path.join(script_dir, "pending_update")
-        os.makedirs(pending_dir, exist_ok=True)
+        launcher   = os.path.join(script_dir, "launcher.py")
+        backup     = os.path.join(script_dir, "launcher_backup.py")
+        tmp        = os.path.join(script_dir, "launcher_new.py")
 
-        # Check for zip first
-        zip_found = False
-        for f in os.listdir(pending_dir):
-            if f.endswith(".zip"):
-                zpath = os.path.join(pending_dir, f)
-                with zipfile.ZipFile(zpath) as z:
-                    for name in z.namelist():
-                        if name.endswith("launcher.py"):
-                            z.extract(name, pending_dir)
-                            import shutil
-                            extracted = os.path.join(pending_dir, name)
-                            shutil.move(extracted, os.path.join(pending_dir, "launcher.py"))
-                            break
-                os.remove(zpath)
-                zip_found = True
-                break
-
-        pending = os.path.join(pending_dir, "launcher.py")
-        launcher = os.path.join(script_dir, "launcher.py")
-        backup = os.path.join(script_dir, "launcher_backup.py")
-
-        if os.path.exists(pending):
-            import shutil
-            if os.path.exists(launcher):
-                shutil.copy2(launcher, backup)
-            shutil.copy2(pending, launcher)
-            os.remove(pending)
-            messagebox.showinfo("✅ Updated!",
-                "Launcher updated successfully!\n\nOld version saved as launcher_backup.py\n\nPlease restart the app.")
-        else:
-            messagebox.showinfo("No Update Found",
-                f"To update:\n\n1. Download the new zip from Claude\n2. Drop it into this folder:\n{pending_dir}\n3. Click Update again")
-            subprocess.Popen(f'explorer "{pending_dir}"')
+        self.status_var.set("⬆ Checking for update...")
+        self.update_idletasks()
+        try:
+            urllib.request.urlretrieve(GITHUB_URL, tmp)
+            # Verify it downloaded something real
+            if os.path.getsize(tmp) < 500:
+                os.remove(tmp)
+                messagebox.showerror("Update Failed", "Downloaded file seems invalid. Try again later.")
+                self.status_var.set("Ready")
+                return
+            # Backup old, apply new
+            shutil.copy2(launcher, backup)
+            shutil.copy2(tmp, launcher)
+            os.remove(tmp)
+            self.status_var.set("✅ Updated! Please restart.")
+            messagebox.showinfo("✅ Update Applied!",
+                "Launcher updated from GitHub!\n\nOld version saved as launcher_backup.py\n\nClose and reopen the app to use the new version.")
+        except Exception as e:
+            self.status_var.set("❌ Update failed")
+            messagebox.showerror("Update Failed", f"Could not reach GitHub:\n{e}\n\nMake sure you are connected to the internet.")
+            try:
+                os.remove(tmp)
+            except:
+                pass
 
     def _load_sample(self):
         self.script_box.delete("1.0", "end")
